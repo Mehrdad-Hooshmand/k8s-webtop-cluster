@@ -1,0 +1,157 @@
+---
+# Namespace for user webtops
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: webtops
+---
+# ConfigMap for Webtop configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webtop-config
+  namespace: webtops
+data:
+  TZ: "Asia/Tehran"
+  PUID: "1000"
+  PGID: "1000"
+---
+# Webtop Deployment Template
+# This will be used for each user instance
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webtop-USERNAME
+  namespace: webtops
+  labels:
+    app: webtop
+    user: USERNAME
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webtop
+      user: USERNAME
+  template:
+    metadata:
+      labels:
+        app: webtop
+        user: USERNAME
+    spec:
+      containers:
+      - name: webtop
+        image: lscr.io/linuxserver/webtop:alpine-kde
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: PUID
+          value: "1000"
+        - name: PGID
+          value: "1000"
+        - name: TZ
+          value: "Asia/Tehran"
+        - name: CUSTOM_USER
+          value: "admin"
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: webtop-USERNAME-secret
+              key: password
+        - name: CUSTOM_PORT
+          value: "3000"
+        - name: DISABLE_HTTPS
+          value: "true"
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        securityContext:
+          privileged: false
+          capabilities:
+            add:
+            - NET_ADMIN
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: webtop-USERNAME-pvc
+---
+# PersistentVolumeClaim for Webtop data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: webtop-USERNAME-pvc
+  namespace: webtops
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path
+---
+# Service for Webtop
+apiVersion: v1
+kind: Service
+metadata:
+  name: webtop-USERNAME-svc
+  namespace: webtops
+  labels:
+    app: webtop
+    user: USERNAME
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: webtop
+    user: USERNAME
+---
+# Secret for Webtop password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: webtop-USERNAME-secret
+  namespace: webtops
+type: Opaque
+stringData:
+  password: "GENERATED_PASSWORD"
+---
+# Ingress for Webtop with SSL
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webtop-USERNAME-ingress
+  namespace: webtops
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: USERNAME.apps.haiocloud.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: webtop-USERNAME-svc
+            port:
+              number: 3000
+  tls:
+  - hosts:
+    - USERNAME.apps.haiocloud.com
+    secretName: webtop-USERNAME-tls
